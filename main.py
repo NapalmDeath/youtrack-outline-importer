@@ -4,6 +4,7 @@ import uuid
 import shutil
 import re
 import zipfile
+from transliterate import translit
 
 
 def extract_archive(archive_path, extract_to):
@@ -17,80 +18,82 @@ def create_archive(directory, output_filename):
     return f"{output_filename}.zip"
 
 
-def move_files(directory):
-    # Проверяем, что указанный путь существует и является папкой
-    if not os.path.exists(directory):
-        print(f"Указанный путь {directory} не существует.")
-        return
+def sanitize_filename(filename):
+    # Транслитерация русских букв
+    transliterated = translit(filename, 'ru', reversed=True)
+    name, ext = os.path.splitext(transliterated)
+    # Заменяем все символы, кроме точки перед расширением, на _
+    sanitized_name = re.sub(r'[^\w-]', '_', name) + ext
+    return sanitized_name
 
-    if not os.path.isdir(directory):
-        print(f"Указанный путь {directory} не является папкой.")
-        return
 
+def move_files_to_single_folder(directory):
     # Создаем папку uploads, если она не существует
     uploads_dir = os.path.join(directory, "uploads")
     os.makedirs(uploads_dir, exist_ok=True)
 
-    # Создаем папку с uuid4 внутри uploads
-    new_uploads_dir = os.path.join(uploads_dir, str(uuid.uuid4()))
-    os.makedirs(new_uploads_dir)
+    # Создаем единую папку с uuid4 внутри uploads
+    single_uploads_dir = os.path.join(uploads_dir, str(uuid.uuid4()).replace("-", ""))
+    os.makedirs(single_uploads_dir)
+
+    path_mapping = {}
 
     # Перебираем все файлы в указанной папке
-    for filename in os.listdir(directory):
-        file_path = os.path.join(directory, filename)
-        # Пропускаем папки и файлы .md
-        if os.path.isdir(file_path) or filename.endswith(".md"):
-            continue
-        # Перемещаем файлы в новую папку
-        shutil.move(file_path, new_uploads_dir)
-        print(f"Файл {filename} перемещен в {new_uploads_dir}")
+    for root, _, files in os.walk(directory):
+        for filename in files:
+            file_path = os.path.join(root, filename)
+            # Пропускаем файлы .md и файлы в уже созданных папках
+            if filename.endswith(".md") or filename.endswith(".mov") or filename.endswith(".mp4") or uploads_dir in root:
+                continue
+            # Создаем папку с uuid4 для каждого файла
+            new_file_dir = os.path.join(single_uploads_dir, str(uuid.uuid4()).replace("-", ""))
+            os.makedirs(new_file_dir)
 
-    return new_uploads_dir
+            # Перемещаем файл в новую папку
+            sanitized_filename = sanitize_filename(filename)
+            new_file_path = os.path.join(new_file_dir, sanitized_filename)
+            shutil.move(file_path, new_file_path)
+            print(f"Файл {filename} перемещен в {new_file_path}")
+
+            # Сохраняем исходный и новый пути в словарь
+            path_mapping[file_path] = new_file_path
+
+    return single_uploads_dir, path_mapping
 
 
-def update_md_files(directory, uploads_dir):
+def update_md_files(directory, path_mapping):
     # Регулярное выражение для поиска ссылок в формате ![](filename)
     pattern = re.compile(r'!\[.*?\]\((.+?)\)(\s*\{.*?\})?')
 
     # Перебираем все .md файлы в указанной папке
-    for filename in os.listdir(directory):
-        if filename.endswith(".md"):
-            file_path = os.path.join(directory, filename)
-            with open(file_path, 'r', encoding='utf-8') as file:
-                content = file.read()
-
-            # Ищем все ссылки на файлы
-            matches = pattern.findall(content)
-            for match in matches:
-                link = match[0]
+    for root, _, files in os.walk(directory):
+        for filename in files:
+            if filename.endswith(".md"):
+                file_path = os.path.join(root, filename)
                 base_md_name = re.sub(r'^\d+\s*', '', os.path.splitext(filename)[0])
-                expected_file_name = f"{base_md_name}_{os.path.basename(link)}"
-                original_file_path = find_file_in_uploads(uploads_dir, expected_file_name)
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    content = file.read()
 
-                if original_file_path:
-                    # Создаем новую папку рядом с файлом с uuid4 в названии
-                    new_dir = os.path.join(os.path.dirname(original_file_path), str(uuid.uuid4()))
-                    os.makedirs(new_dir)
+                # Ищем все ссылки на файлы и обновляем пути
+                matches = pattern.findall(content)
+                for match in matches:
+                    link = match[0]
+                    expected_file_name = f"{base_md_name}_{sanitize_filename(link)}"
+                    abs_link_path = find_file_in_uploads(path_mapping, expected_file_name)
 
-                    # Перемещаем файл в новую папку
-                    new_file_path = os.path.join(new_dir, expected_file_name)
-                    shutil.move(original_file_path, new_file_path)
-                    print(f"Файл {expected_file_name} перемещен в {new_file_path}")
+                    if abs_link_path:
+                        new_link = os.path.relpath(abs_link_path, directory).replace("\\", "/")
+                        content = re.sub(re.escape(f"![]({link})") + r'(\s*\{.*?\})?', f"![]({new_link})", content)
 
-                    # Обновляем ссылку в .md файле и удаляем настройки
-                    new_link = f"![]({os.path.relpath(new_file_path, directory)})"
-                    content = re.sub(re.escape(f"![]({link})") + r'(\s*\{.*?\})?', new_link, content)
-
-            # Записываем обновленный контент обратно в .md файл
-            with open(file_path, 'w', encoding='utf-8') as file:
-                file.write(content)
+                # Записываем обновленный контент обратно в .md файл
+                with open(file_path, 'w', encoding='utf-8') as file:
+                    file.write(content)
 
 
-def find_file_in_uploads(uploads_dir, expected_file_name):
-    # Рекурсивно ищем файл в папке uploads
-    for root, _, files in os.walk(uploads_dir):
-        if expected_file_name in files:
-            return os.path.join(root, expected_file_name)
+def find_file_in_uploads(path_mapping, expected_file_name):
+    for original_path, new_path in path_mapping.items():
+        if expected_file_name in new_path:
+            return new_path
     return None
 
 
@@ -105,13 +108,13 @@ if __name__ == "__main__":
     output_archive_name = os.path.join(archive_dir, f"{archive_name}_converted")
 
     # Временная директория для извлечения архива
-    temp_dir = os.path.join(archive_dir, str(uuid.uuid4()))
+    temp_dir = os.path.join(archive_dir, str(uuid.uuid4()).replace("-", ""))
     os.makedirs(temp_dir)
 
     try:
         extracted_dir = extract_archive(archive_path, temp_dir)
-        uploads_dir = move_files(extracted_dir)
-        update_md_files(extracted_dir, uploads_dir)
+        uploads_dir, path_mapping = move_files_to_single_folder(extracted_dir)
+        update_md_files(extracted_dir, path_mapping)
         new_archive = create_archive(extracted_dir, output_archive_name)
         print(f"Новый архив создан: {new_archive}")
     finally:
