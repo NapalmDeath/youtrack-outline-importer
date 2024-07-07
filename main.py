@@ -14,8 +14,13 @@ def extract_archive(archive_path, extract_to):
 
 
 def create_archive(directory, output_filename):
-    shutil.make_archive(output_filename, 'zip', directory)
-    return f"{output_filename}.zip"
+    with zipfile.ZipFile(output_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, dirs, files in os.walk(directory):
+            for file in files:
+                file_path = os.path.join(root, file)
+                arcname = os.path.relpath(file_path, os.path.abspath(directory))
+                zipf.write(file_path, arcname)
+    return output_filename
 
 
 def sanitize_filename(filename):
@@ -43,7 +48,7 @@ def move_files_to_single_folder(directory):
         for filename in files:
             file_path = os.path.join(root, filename)
             # Пропускаем файлы .md и файлы в уже созданных папках
-            if filename.endswith(".md") or filename.endswith(".mov") or filename.endswith(".mp4") or uploads_dir in root:
+            if filename.endswith(".md") or uploads_dir in root:
                 continue
             # Создаем папку с uuid4 для каждого файла
             new_file_dir = os.path.join(single_uploads_dir, str(uuid.uuid4()).replace("-", ""))
@@ -78,12 +83,18 @@ def update_md_files(directory, path_mapping):
                 matches = pattern.findall(content)
                 for match in matches:
                     link = match[0]
-                    expected_file_name = f"{base_md_name}_{sanitize_filename(link)}"
-                    abs_link_path = find_file_in_uploads(path_mapping, expected_file_name)
+                    sanitized_link = sanitize_filename(link)
+                    abs_link_path = find_file_in_uploads(path_mapping, sanitized_link)
 
                     if abs_link_path:
                         new_link = os.path.relpath(abs_link_path, directory).replace("\\", "/")
-                        content = re.sub(re.escape(f"![]({link})") + r'(\s*\{.*?\})?', f"![]({new_link})", content)
+                        ext = os.path.splitext(sanitized_link)[1].lower()
+                        if ext in ['.mov', '.mp4']:
+                            new_text = f"[{sanitized_link} 640x480]"
+                        else:
+                            new_text = f"![]"
+                        content = re.sub(re.escape(f"![]({link})") + r'(\s*\{.*?\})?', f"{new_text}({new_link})",
+                                         content)
 
                 # Записываем обновленный контент обратно в .md файл
                 with open(file_path, 'w', encoding='utf-8') as file:
@@ -105,7 +116,7 @@ if __name__ == "__main__":
     archive_path = sys.argv[1]
     archive_dir = os.path.dirname(archive_path)
     archive_name = os.path.splitext(os.path.basename(archive_path))[0]
-    output_archive_name = os.path.join(archive_dir, f"{archive_name}_converted")
+    output_archive_name = os.path.join(archive_dir, f"{archive_name}_converted.zip")
 
     # Временная директория для извлечения архива
     temp_dir = os.path.join(archive_dir, str(uuid.uuid4()).replace("-", ""))
