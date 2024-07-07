@@ -18,8 +18,9 @@ def create_archive(directory, output_filename):
         for root, dirs, files in os.walk(directory):
             for file in files:
                 file_path = os.path.join(root, file)
-                arcname = os.path.relpath(file_path, os.path.abspath(directory))
+                arcname = os.path.relpath(file_path, os.path.join(directory, '..'))
                 zipf.write(file_path, arcname)
+
     return output_filename
 
 
