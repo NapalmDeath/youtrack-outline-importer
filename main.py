@@ -62,7 +62,7 @@ def move_files_to_single_folder(directory):
             print(f"Файл {filename} перемещен в {new_file_path}")
 
             # Сохраняем исходный и новый пути в словарь
-            path_mapping[file_path] = new_file_path
+            path_mapping[filename] = new_file_path
 
     return single_uploads_dir, path_mapping
 
@@ -84,11 +84,13 @@ def update_md_files(directory, path_mapping):
                 matches = pattern.findall(content)
                 for match in matches:
                     link = match[0]
-                    sanitized_link = sanitize_filename(link)
-                    abs_link_path = find_file_in_uploads(path_mapping, sanitized_link)
+                    full_link = base_md_name + '_' + link
+                    # abs_link_path = find_file_in_uploads(path_mapping, full_link)
+                    abs_link_path = path_mapping.get(full_link, None)
 
                     if abs_link_path:
                         new_link = os.path.relpath(abs_link_path, directory).replace("\\", "/")
+                        sanitized_link = sanitize_filename(link)
                         ext = os.path.splitext(sanitized_link)[1].lower()
                         if ext in ['.mov', '.mp4']:
                             new_text = f"[{sanitized_link} 640x480]"
